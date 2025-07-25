@@ -1,65 +1,33 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity 0.8.28;
 
-import {Test, console} from "forge-std/Test.sol";
-import {CrossBegPaymentRequest} from "../src/CrossBeg.sol";
+import "forge-std/Test.sol";
+import "forge-std/console.sol";
 
-// Mock Hyperlane Mailbox for testing
-contract MockMailbox {
-    mapping(uint32 => mapping(bytes32 => bytes)) public dispatched;
-    uint256 public constant QUOTE_GAS_PAYMENT = 0.001 ether;
-    
-    event Dispatch(
-        address indexed sender,
-        uint32 indexed destination,
-        bytes32 indexed recipient,
-        bytes message
-    );
-    
-    function dispatch(
-        uint32 destination,
-        bytes32 recipient,
-        bytes calldata messageBody
-    ) external payable returns (bytes32) {
-        require(msg.value >= QUOTE_GAS_PAYMENT, "MockMailbox: insufficient gas");
-        
-        bytes32 messageId = keccak256(abi.encode(destination, recipient, messageBody, block.timestamp));
-        dispatched[destination][recipient] = messageBody;
-        
-        emit Dispatch(msg.sender, destination, recipient, messageBody);
-        return messageId;
-    }
-    
-    function quoteDispatch(
-        uint32,
-        bytes32,
-        bytes calldata
-    ) external pure returns (uint256) {
-        return QUOTE_GAS_PAYMENT;
-    }
-    
-    // Helper function to simulate cross-chain message delivery
-    function deliverMessage(
-        address crossBegContract,
-        uint32 origin,
-        bytes32 sender,
-        bytes calldata messageBody
-    ) external {
-        CrossBegPaymentRequest(payable(crossBegContract)).handle(origin, sender, messageBody);
-    }
-}
+import "../src/CrossBeg.sol";
+// import {PaymentRequestFulfilled, PaymentRequestCancelled} from "../src/CrossBeg.sol";
 
 contract CrossBegPaymentRequestTest is Test {
-    CrossBegPaymentRequest public crossBeg;
-    MockMailbox public mockMailbox;
+    CrossBegPaymentRequest public mantleContract;
+    CrossBegPaymentRequest public baseContract;
+    CrossBegPaymentRequest public polygonContract;
     
-    address public owner = address(this);
-    address public user1 = address(0x100);
-    address public user2 = address(0x200);
-    address public user3 = address(0x300);
+    // Test addresses
+    address public owner = makeAddr("owner");
+    address public relayer = makeAddr("relayer");
+    address public alice = makeAddr("alice");
+    address public bob = makeAddr("bob");
+    address public charlie = makeAddr("charlie");
     
-    uint32 public constant LOCAL_DOMAIN = 1;
-    uint32 public constant REMOTE_DOMAIN = 2;
+    // Chain IDs
+    uint32 public constant MANTLE_CHAIN_ID = 5000;
+    uint32 public constant BASE_CHAIN_ID = 84532;
+    uint32 public constant POLYGON_CHAIN_ID = 80002;
+    
+    // Test constants
+    string public constant TEST_TOKEN = "USDC";
+    uint256 public constant TEST_AMOUNT = 100e6; // 100 USDC
+    string public constant TEST_MESSAGE = "Payment for services";
     
     event PaymentRequestCreated(
         uint256 indexed requestId,
@@ -69,7 +37,8 @@ contract CrossBegPaymentRequestTest is Test {
         string token,
         uint32 targetChain,
         string message,
-        uint256 timestamp
+        uint256 timestamp,
+        uint256 expiryTime
     );
     
     event PaymentRequestReceived(
@@ -80,731 +49,733 @@ contract CrossBegPaymentRequestTest is Test {
         string token,
         uint32 originChain,
         string message,
-        uint256 timestamp
-    );
-    
-    event PaymentRequestFulfilled(
-        uint256 indexed requestId,
-        address indexed payer,
-        uint256 amount,
-        string token,
-        string txHash
-    );
-    
-    event PaymentRequestCancelled(
-        uint256 indexed requestId,
-        address indexed requester
+        uint256 timestamp,
+        uint256 expiryTime,
+        CrossBegPaymentRequest.MessageStatus status
     );
     
     event CrossChainMessageSent(
         uint256 indexed requestId,
-        uint32 destinationChain,
-        bytes32 messageId
+        address indexed requester,
+        address indexed target,
+        uint32 targetChain,
+        uint256 amount,
+        string token,
+        string message,
+        uint256 expiryTime,
+        bytes32 messageHash
+    );
+    
+    event CrossChainMessageDelivered(
+        uint256 indexed requestId,
+        uint32 originChain,
+        bytes32 messageHash,
+        CrossBegPaymentRequest.MessageStatus status
     );
 
     function setUp() public {
-        mockMailbox = new MockMailbox();
-        crossBeg = new CrossBegPaymentRequest(address(mockMailbox), LOCAL_DOMAIN);
+        vm.startPrank(owner);
         
-        // Setup remote contract
-        crossBeg.setRemoteContract(REMOTE_DOMAIN, address(crossBeg));
+        // Deploy contracts for different chains
+        mantleContract = new CrossBegPaymentRequest(MANTLE_CHAIN_ID, relayer);
+        baseContract = new CrossBegPaymentRequest(BASE_CHAIN_ID, relayer);
+        polygonContract = new CrossBegPaymentRequest(POLYGON_CHAIN_ID, relayer);
         
-        // Fund users with ETH
-        vm.deal(user1, 10 ether);
-        vm.deal(user2, 10 ether);
-        vm.deal(user3, 10 ether);
+        // Set up cross-chain support
+        mantleContract.addSupportedChain(BASE_CHAIN_ID, address(baseContract));
+        mantleContract.addSupportedChain(POLYGON_CHAIN_ID, address(polygonContract));
+        
+        baseContract.addSupportedChain(MANTLE_CHAIN_ID, address(mantleContract));
+        baseContract.addSupportedChain(POLYGON_CHAIN_ID, address(polygonContract));
+        
+        polygonContract.addSupportedChain(MANTLE_CHAIN_ID, address(mantleContract));
+        polygonContract.addSupportedChain(BASE_CHAIN_ID, address(baseContract));
+        
+        vm.stopPrank();
     }
 
-    function test_Constructor() public view {
-        assertEq(address(crossBeg.mailbox()), address(mockMailbox));
-        assertEq(crossBeg.localDomain(), LOCAL_DOMAIN);
-        assertEq(crossBeg.owner(), owner);
-        assertEq(crossBeg.nextRequestId(), 1);
+    function testDeployment() public view {
+        assertEq(mantleContract.owner(), owner);
+        assertEq(mantleContract.relayer(), relayer);
+        assertEq(mantleContract.localChainId(), MANTLE_CHAIN_ID);
+        assertEq(mantleContract.nextRequestId(), 1);
     }
 
-    function test_TransferOwnership() public {
-        crossBeg.transferOwnership(user1);
-        assertEq(crossBeg.owner(), user1);
-    }
-
-    function test_TransferOwnership_RevertInvalidOwner() public {
+    function testTransferOwnership() public {
+        vm.prank(owner);
+        mantleContract.transferOwnership(alice);
+        assertEq(mantleContract.owner(), alice);
+        
+        // Test revert for invalid address
+        vm.prank(alice);
         vm.expectRevert("CrossBeg: invalid new owner");
-        crossBeg.transferOwnership(address(0));
+        mantleContract.transferOwnership(address(0));
     }
 
-    function test_TransferOwnership_RevertNotOwner() public {
-        vm.prank(user1);
-        vm.expectRevert("CrossBeg: not owner");
-        crossBeg.transferOwnership(user2);
+    function testSetRelayer() public {
+        vm.prank(owner);
+        mantleContract.setRelayer(alice);
+        assertEq(mantleContract.relayer(), alice);
+        
+        // Test revert for invalid address
+        vm.prank(owner);
+        vm.expectRevert("CrossBeg: invalid relayer");
+        mantleContract.setRelayer(address(0));
     }
 
-    function test_SetRemoteContract() public {
-        crossBeg.setRemoteContract(3, user1);
-        assertEq(crossBeg.remoteCrossBegContracts(3), user1);
+    function testAddSupportedChain() public {
+        address newContract = makeAddr("newContract");
+        uint32 newChainId = 12345;
+        
+        vm.prank(owner);
+        mantleContract.addSupportedChain(newChainId, newContract);
+        
+        assertTrue(mantleContract.supportedChains(newChainId));
+        assertEq(mantleContract.remoteCrossBegContracts(newChainId), newContract);
     }
 
-    function test_SetRemoteContracts() public {
-        uint32[] memory chainIds = new uint32[](2);
-        address[] memory contracts = new address[](2);
+    function testRemoveSupportedChain() public {
+        vm.prank(owner);
+        mantleContract.removeSupportedChain(BASE_CHAIN_ID);
         
-        chainIds[0] = 3;
-        chainIds[1] = 4;
-        contracts[0] = user1;
-        contracts[1] = user2;
+        assertFalse(mantleContract.supportedChains(BASE_CHAIN_ID));
+        assertEq(mantleContract.remoteCrossBegContracts(BASE_CHAIN_ID), address(0));
         
-        crossBeg.setRemoteContracts(chainIds, contracts);
-        
-        assertEq(crossBeg.remoteCrossBegContracts(3), user1);
-        assertEq(crossBeg.remoteCrossBegContracts(4), user2);
+        // Test revert for local chain
+        vm.prank(owner);
+        vm.expectRevert("CrossBeg: cannot remove local chain");
+        mantleContract.removeSupportedChain(MANTLE_CHAIN_ID);
     }
 
-    function test_SetRemoteContracts_RevertLengthMismatch() public {
-        uint32[] memory chainIds = new uint32[](2);
-        address[] memory contracts = new address[](1);
+    function testCreateLocalPaymentRequest() public {
+        vm.prank(alice);
         
-        chainIds[0] = 3;
-        chainIds[1] = 4;
-        contracts[0] = user1;
-        
-        vm.expectRevert("CrossBeg: length mismatch");
-        crossBeg.setRemoteContracts(chainIds, contracts);
-    }
-
-    function test_CreateLocalPaymentRequest() public {
-        vm.prank(user1);
         vm.expectEmit(true, true, true, true);
         emit PaymentRequestCreated(
             1,
-            user1,
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request",
-            block.timestamp
+            alice,
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            block.timestamp,
+            block.timestamp + 7 days
         );
         
-        uint256 requestId = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request",
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
             0
         );
         
         assertEq(requestId, 1);
-        assertEq(crossBeg.nextRequestId(), 2);
         
-        CrossBegPaymentRequest.PaymentRequest memory request = crossBeg.getPaymentRequest(1);
+        CrossBegPaymentRequest.PaymentRequest memory request = mantleContract.getPaymentRequest(1);
         assertEq(request.id, 1);
-        assertEq(request.requester, user1);
-        assertEq(request.target, user2);
-        assertEq(request.amount, 1 ether);
-        assertEq(request.token, "ETH");
-        assertEq(request.originChain, LOCAL_DOMAIN);
-        assertEq(request.targetChain, LOCAL_DOMAIN);
-        assertEq(request.message, "Test request");
-        assertEq(uint256(request.status), uint256(CrossBegPaymentRequest.RequestStatus.Pending));
-        assertEq(request.timestamp, block.timestamp);
-        assertEq(request.expiryTime, block.timestamp + crossBeg.DEFAULT_EXPIRY_TIME());
+        assertEq(request.requester, alice);
+        assertEq(request.target, bob);
+        assertEq(request.amount, TEST_AMOUNT);
+        assertEq(request.token, TEST_TOKEN);
+        assertEq(request.originChain, MANTLE_CHAIN_ID);
+        assertEq(request.targetChain, MANTLE_CHAIN_ID);
+        assertEq(request.message, TEST_MESSAGE);
+        assertTrue(request.status == CrossBegPaymentRequest.RequestStatus.Pending);
+        assertTrue(request.messageStatus == CrossBegPaymentRequest.MessageStatus.Local);
         
-        // Check user mappings
-        uint256[] memory sentRequests = crossBeg.getUserSentRequests(user1);
+        // Check user arrays
+        uint256[] memory sentRequests = mantleContract.getUserSentRequests(alice);
+        uint256[] memory receivedRequests = mantleContract.getUserReceivedRequests(bob);
+        
         assertEq(sentRequests.length, 1);
         assertEq(sentRequests[0], 1);
-        
-        uint256[] memory receivedRequests = crossBeg.getUserReceivedRequests(user2);
         assertEq(receivedRequests.length, 1);
         assertEq(receivedRequests[0], 1);
     }
 
-    function test_CreateCrossChainPaymentRequest() public {
-        vm.prank(user1);
+    function testCreateCrossChainPaymentRequest() public {
+        vm.prank(alice);
+        
         vm.expectEmit(true, true, true, true);
         emit PaymentRequestCreated(
             1,
-            user1,
-            user2,
-            1 ether,
-            "ETH",
-            REMOTE_DOMAIN,
-            "Cross-chain request",
-            block.timestamp
+            alice,
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            BASE_CHAIN_ID,
+            TEST_MESSAGE,
+            block.timestamp,
+            block.timestamp + 7 days
         );
         
-        uint256 requestId = crossBeg.createPaymentRequest{value: 0.001 ether}(
-            user2,
-            1 ether,
-            "ETH",
-            REMOTE_DOMAIN,
-            "Cross-chain request",
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            BASE_CHAIN_ID,
+            TEST_MESSAGE,
             0
         );
         
         assertEq(requestId, 1);
         
-        CrossBegPaymentRequest.PaymentRequest memory request = crossBeg.getPaymentRequest(1);
-        assertEq(request.targetChain, REMOTE_DOMAIN);
+        CrossBegPaymentRequest.PaymentRequest memory request = mantleContract.getPaymentRequest(1);
+        assertEq(request.targetChain, BASE_CHAIN_ID);
+        assertTrue(request.messageStatus == CrossBegPaymentRequest.MessageStatus.Sent);
         
-        // Check that cross-chain message was sent
-        uint256[] memory sentRequests = crossBeg.getUserSentRequests(user1);
-        assertEq(sentRequests.length, 1);
-        
-        // Target should not have received request locally (it's cross-chain)
-        uint256[] memory receivedRequests = crossBeg.getUserReceivedRequests(user2);
+        // Should not be in target's received requests on origin chain
+        uint256[] memory receivedRequests = mantleContract.getUserReceivedRequests(bob);
         assertEq(receivedRequests.length, 0);
     }
 
-    function test_CreatePaymentRequest_RevertInvalidTarget() public {
-        vm.prank(user1);
-        vm.expectRevert("CrossBeg: invalid target address");
-        crossBeg.createPaymentRequest(
-            address(0),
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test",
+    function testReceiveMessage() public {
+        // First create a request on Mantle
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            BASE_CHAIN_ID,
+            TEST_MESSAGE,
             0
         );
-    }
-
-    function test_CreatePaymentRequest_RevertZeroAmount() public {
-        vm.prank(user1);
-        vm.expectRevert("CrossBeg: amount must be greater than zero");
-        crossBeg.createPaymentRequest(
-            user2,
-            0,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test",
-            0
-        );
-    }
-
-    function test_CreatePaymentRequest_RevertSelfRequest() public {
-        vm.prank(user1);
-        vm.expectRevert("CrossBeg: cannot request from yourself");
-        crossBeg.createPaymentRequest(
-            user1,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test",
-            0
-        );
-    }
-
-    function test_CreatePaymentRequest_RevertEmptyToken() public {
-        vm.prank(user1);
-        vm.expectRevert("CrossBeg: token cannot be empty");
-        crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "",
-            LOCAL_DOMAIN,
-            "Test",
-            0
-        );
-    }
-
-    function test_CreatePaymentRequest_RevertInvalidExpiryTime() public {
-        vm.prank(user1);
-        vm.expectRevert("CrossBeg: invalid expiry time");
-        crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test",
-            30 minutes // Less than MIN_EXPIRY_TIME
-        );
-    }
-
-    function test_CreatePaymentRequest_RevertUnsupportedChain() public {
-        vm.prank(user1);
-        vm.expectRevert("CrossBeg: chain not supported");
-        crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            999, // Unsupported chain
-            "Test",
-            0
-        );
-    }
-
-    function test_CreatePaymentRequest_RevertInsufficientGasPayment() public {
-        vm.prank(user1);
-        vm.expectRevert("CrossBeg: insufficient gas payment");
-        crossBeg.createPaymentRequest{value: 0.0001 ether}( // Too little gas
-            user2,
-            1 ether,
-            "ETH",
-            REMOTE_DOMAIN,
-            "Test",
-            0
-        );
-    }
-
-    function test_HandleCrossChainMessage() public {
-        // Create a cross-chain message
-        uint256 requestId = 1;
-        address requester = user1;
-        address target = user2;
-        uint256 amount = 1 ether;
-        string memory token = "ETH";
-        uint32 originChain = REMOTE_DOMAIN;
-        string memory message = "Cross-chain request";
-        uint256 timestamp = block.timestamp;
-        uint256 expiryTime = block.timestamp + 7 days;
         
-        bytes memory messageBody = abi.encode(
-            requestId,
-            requester,
-            target,
-            amount,
-            token,
-            originChain,
-            message,
-            timestamp,
-            expiryTime
-        );
+        CrossBegPaymentRequest.PaymentRequest memory originalRequest = mantleContract.getPaymentRequest(requestId);
+        
+        // Simulate relayer delivering message to Base
+        vm.prank(relayer);
         
         vm.expectEmit(true, true, true, true);
         emit PaymentRequestReceived(
             requestId,
-            requester,
-            target,
-            amount,
-            token,
-            originChain,
-            message,
-            timestamp
+            alice,
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            originalRequest.timestamp,
+            originalRequest.expiryTime,
+            CrossBegPaymentRequest.MessageStatus.Delivered
         );
         
-        // Simulate message delivery from remote contract
-        bytes32 sender = bytes32(uint256(uint160(address(crossBeg))));
-        mockMailbox.deliverMessage(address(crossBeg), REMOTE_DOMAIN, sender, messageBody);
+        baseContract.receiveMessage(
+            requestId,
+            alice,
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            originalRequest.timestamp,
+            originalRequest.expiryTime,
+            originalRequest.messageHash
+        );
         
-        // Check that request was stored
-        CrossBegPaymentRequest.PaymentRequest memory request = crossBeg.getPaymentRequest(requestId);
-        assertEq(request.id, requestId);
-        assertEq(request.requester, requester);
-        assertEq(request.target, target);
-        assertEq(request.amount, amount);
-        assertEq(request.token, token);
-        assertEq(request.originChain, originChain);
-        assertEq(request.targetChain, LOCAL_DOMAIN);
+        // Check the request was created on Base
+        CrossBegPaymentRequest.PaymentRequest memory deliveredRequest = baseContract.getPaymentRequest(requestId);
+        assertEq(deliveredRequest.id, requestId);
+        assertEq(deliveredRequest.requester, alice);
+        assertEq(deliveredRequest.target, bob);
+        assertEq(deliveredRequest.originChain, MANTLE_CHAIN_ID);
+        assertEq(deliveredRequest.targetChain, BASE_CHAIN_ID);
+        assertTrue(deliveredRequest.messageStatus == CrossBegPaymentRequest.MessageStatus.Delivered);
         
-        // Check that target received the request
-        uint256[] memory receivedRequests = crossBeg.getUserReceivedRequests(target);
+        // Check target's received requests on Base
+        uint256[] memory receivedRequests = baseContract.getUserReceivedRequests(bob);
         assertEq(receivedRequests.length, 1);
         assertEq(receivedRequests[0], requestId);
     }
 
-    function test_HandleCrossChainMessage_RevertInvalidSender() public {
-        bytes memory messageBody = abi.encode(
-            1,
-            user1,
-            user2,
-            1 ether,
-            "ETH",
-            REMOTE_DOMAIN,
-            "Test",
-            block.timestamp,
-            block.timestamp + 7 days
-        );
-        
-        // Use invalid sender
-        bytes32 invalidSender = bytes32(uint256(uint160(user3)));
-        
-        vm.expectRevert("CrossBeg: invalid sender");
-        mockMailbox.deliverMessage(address(crossBeg), REMOTE_DOMAIN, invalidSender, messageBody);
-    }
-
-    function test_HandleCrossChainMessage_RevertExpiredRequest() public {
-        // Create expired message with proper timestamps
-        // Set current time to a known value
-        vm.warp(1000000);
-        
-        bytes memory messageBody = abi.encode(
-            1,
-            user1,
-            user2,
-            1 ether,
-            "ETH",
-            REMOTE_DOMAIN,
-            "Test",
-            999000,  // Some timestamp in the past
-            999999   // Expired timestamp in the past (before current time)
-        );
-        
-        bytes32 sender = bytes32(uint256(uint160(address(crossBeg))));
-        
-        vm.expectRevert("CrossBeg: request expired");
-        mockMailbox.deliverMessage(address(crossBeg), REMOTE_DOMAIN, sender, messageBody);
-    }
-
-    function test_FulfillPaymentRequest() public {
-        // Create a local request
-        vm.prank(user1);
-        uint256 requestId = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request",
+    function testReceiveMessageReplayPrevention() public {
+        // Create and deliver a message
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            BASE_CHAIN_ID,
+            TEST_MESSAGE,
             0
         );
         
-        // Fulfill the request
-        vm.prank(user2);
-        vm.expectEmit(true, true, true, true);
-        emit PaymentRequestFulfilled(
+        CrossBegPaymentRequest.PaymentRequest memory originalRequest = mantleContract.getPaymentRequest(requestId);
+        
+        vm.prank(relayer);
+        baseContract.receiveMessage(
             requestId,
-            user2,
-            1 ether,
-            "ETH",
-            "0x123abc"
+            alice,
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            originalRequest.timestamp,
+            originalRequest.expiryTime,
+            originalRequest.messageHash
         );
         
-        crossBeg.fulfillPaymentRequest(requestId, "0x123abc");
-        
-        CrossBegPaymentRequest.PaymentRequest memory request = crossBeg.getPaymentRequest(requestId);
-        assertEq(uint256(request.status), uint256(CrossBegPaymentRequest.RequestStatus.Fulfilled));
-        assertEq(request.fulfillmentTxHash, "0x123abc");
+        // Try to deliver the same message again
+        vm.prank(relayer);
+        vm.expectRevert("CrossBeg: message already processed");
+        baseContract.receiveMessage(
+            requestId,
+            alice,
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            originalRequest.timestamp,
+            originalRequest.expiryTime,
+            originalRequest.messageHash
+        );
     }
 
-    function test_FulfillPaymentRequest_RevertNotTarget() public {
-        vm.prank(user1);
-        uint256 requestId = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request",
+    function testReceiveMessageInvalidHash() public {
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            BASE_CHAIN_ID,
+            TEST_MESSAGE,
             0
         );
         
-        vm.prank(user3);
-        vm.expectRevert("CrossBeg: not the target of this request");
-        crossBeg.fulfillPaymentRequest(requestId, "0x123abc");
+        CrossBegPaymentRequest.PaymentRequest memory originalRequest = mantleContract.getPaymentRequest(requestId);
+        
+        // Try to deliver with wrong hash
+        vm.prank(relayer);
+        vm.expectRevert("CrossBeg: invalid message hash");
+        baseContract.receiveMessage(
+            requestId,
+            alice,
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            originalRequest.timestamp,
+            originalRequest.expiryTime,
+            bytes32("wrong_hash")
+        );
     }
 
-    function test_FulfillPaymentRequest_RevertRequestNotPending() public {
-        vm.prank(user1);
-        uint256 requestId = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request",
+    function testFulfillPaymentRequest() public {
+        // Create local request
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
             0
         );
         
-        // Fulfill first time
-        vm.prank(user2);
-        crossBeg.fulfillPaymentRequest(requestId, "0x123abc");
+        string memory txHash = "0x1234567890abcdef";
         
-        // Try to fulfill again
-        vm.prank(user2);
-        vm.expectRevert("CrossBeg: request not pending");
-        crossBeg.fulfillPaymentRequest(requestId, "0x456def");
-    }
-
-    function test_FulfillPaymentRequest_RevertExpiredRequest() public {
-        vm.prank(user1);
-        uint256 requestId = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request",
-            crossBeg.MIN_EXPIRY_TIME()
-        );
-        
-        // Fast forward past expiry
-        vm.warp(block.timestamp + crossBeg.MIN_EXPIRY_TIME() + 1);
-        
-        vm.prank(user2);
-        vm.expectRevert("CrossBeg: request expired");
-        crossBeg.fulfillPaymentRequest(requestId, "0x123abc");
-    }
-
-    function test_FulfillPaymentRequest_RevertEmptyTxHash() public {
-        vm.prank(user1);
-        uint256 requestId = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request",
-            0
-        );
-        
-        vm.prank(user2);
-        vm.expectRevert("CrossBeg: transaction hash required");
-        crossBeg.fulfillPaymentRequest(requestId, "");
-    }
-
-    function test_CancelPaymentRequest() public {
-        vm.prank(user1);
-        uint256 requestId = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request",
-            0
-        );
-        
-        vm.prank(user1);
+        vm.prank(bob);
         vm.expectEmit(true, true, true, true);
-        emit PaymentRequestCancelled(requestId, user1);
+        emit CrossBegPaymentRequest.PaymentRequestFulfilled(requestId, bob, TEST_AMOUNT, TEST_TOKEN, txHash);
         
-        crossBeg.cancelPaymentRequest(requestId);
+        mantleContract.fulfillPaymentRequest(requestId, txHash);
         
-        CrossBegPaymentRequest.PaymentRequest memory request = crossBeg.getPaymentRequest(requestId);
-        assertEq(uint256(request.status), uint256(CrossBegPaymentRequest.RequestStatus.Cancelled));
+        CrossBegPaymentRequest.PaymentRequest memory request = mantleContract.getPaymentRequest(requestId);
+        assertTrue(request.status == CrossBegPaymentRequest.RequestStatus.Fulfilled);
+        assertEq(request.fulfillmentTxHash, txHash);
     }
 
-    function test_CancelPaymentRequest_RevertNotRequester() public {
-        vm.prank(user1);
-        uint256 requestId = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request",
+    function testFulfillPaymentRequestUnauthorized() public {
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
             0
         );
         
-        vm.prank(user2);
+        // Charlie tries to fulfill Bob's request
+        vm.prank(charlie);
+        vm.expectRevert("CrossBeg: not the target of this request");
+        mantleContract.fulfillPaymentRequest(requestId, "0x123");
+    }
+
+    function testCancelPaymentRequest() public {
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            0
+        );
+        
+        vm.prank(alice);
+        vm.expectEmit(true, true, true, true);
+        emit CrossBegPaymentRequest.PaymentRequestCancelled(requestId, alice);
+        
+        mantleContract.cancelPaymentRequest(requestId);
+        
+        CrossBegPaymentRequest.PaymentRequest memory request = mantleContract.getPaymentRequest(requestId);
+        assertTrue(request.status == CrossBegPaymentRequest.RequestStatus.Cancelled);
+    }
+
+    function testCancelPaymentRequestUnauthorized() public {
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            0
+        );
+        
+        // Bob tries to cancel Alice's request
+        vm.prank(bob);
         vm.expectRevert("CrossBeg: not the requester");
-        crossBeg.cancelPaymentRequest(requestId);
+        mantleContract.cancelPaymentRequest(requestId);
     }
 
-    function test_CancelPaymentRequest_RevertNotPending() public {
-        vm.prank(user1);
-        uint256 requestId = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request",
-            0
+    function testMarkExpiredRequests() public {
+        // Create request with short expiry
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            1 hours
         );
         
-        // Cancel first time
-        vm.prank(user1);
-        crossBeg.cancelPaymentRequest(requestId);
+        // Fast forward time
+        vm.warp(block.timestamp + 2 hours);
         
-        // Try to cancel again
-        vm.prank(user1);
-        vm.expectRevert("CrossBeg: request not pending");
-        crossBeg.cancelPaymentRequest(requestId);
+        uint256[] memory requestIds = new uint256[](1);
+        requestIds[0] = requestId;
+        
+        mantleContract.markExpiredRequests(requestIds);
+        
+        CrossBegPaymentRequest.PaymentRequest memory request = mantleContract.getPaymentRequest(requestId);
+        assertTrue(request.status == CrossBegPaymentRequest.RequestStatus.Expired);
     }
 
-    function test_MarkExpiredRequests() public {
-        // Create requests with different expiry times
-        vm.prank(user1);
-        uint256 requestId1 = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request 1",
-            crossBeg.MIN_EXPIRY_TIME()
-        );
+    function testCustomExpiryTime() public {
+        uint256 customExpiry = 2 days;
         
-        vm.prank(user1);
-        uint256 requestId2 = crossBeg.createPaymentRequest(
-            user2,
-            2 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request 2",
-            crossBeg.DEFAULT_EXPIRY_TIME()
-        );
-        
-        // Fast forward past first request expiry
-        vm.warp(block.timestamp + crossBeg.MIN_EXPIRY_TIME() + 1);
-        
-        uint256[] memory requestIds = new uint256[](2);
-        requestIds[0] = requestId1;
-        requestIds[1] = requestId2;
-        
-        crossBeg.markExpiredRequests(requestIds);
-        
-        // Check statuses
-        CrossBegPaymentRequest.PaymentRequest memory request1 = crossBeg.getPaymentRequest(requestId1);
-        CrossBegPaymentRequest.PaymentRequest memory request2 = crossBeg.getPaymentRequest(requestId2);
-        
-        assertEq(uint256(request1.status), uint256(CrossBegPaymentRequest.RequestStatus.Expired));
-        assertEq(uint256(request2.status), uint256(CrossBegPaymentRequest.RequestStatus.Pending));
-    }
-
-    function test_GetPaymentRequests() public {
-        // Create multiple requests
-        vm.prank(user1);
-        uint256 requestId1 = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request 1",
-            0
-        );
-        
-        vm.prank(user1);
-        uint256 requestId2 = crossBeg.createPaymentRequest(
-            user2,
-            2 ether,
-            "USDC",
-            LOCAL_DOMAIN,
-            "Test request 2",
-            0
-        );
-        
-        uint256[] memory requestIds = new uint256[](2);
-        requestIds[0] = requestId1;
-        requestIds[1] = requestId2;
-        
-        CrossBegPaymentRequest.PaymentRequest[] memory requests = crossBeg.getPaymentRequests(requestIds);
-        
-        assertEq(requests.length, 2);
-        assertEq(requests[0].id, requestId1);
-        assertEq(requests[0].amount, 1 ether);
-        assertEq(requests[0].token, "ETH");
-        assertEq(requests[1].id, requestId2);
-        assertEq(requests[1].amount, 2 ether);
-        assertEq(requests[1].token, "USDC");
-    }
-
-    function test_QuoteGasPayment() public view {
-        bytes memory messageBody = abi.encode(
-            1,
-            user1,
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test",
-            block.timestamp,
-            block.timestamp + 7 days
-        );
-        
-        uint256 gasPayment = crossBeg.quoteGasPayment(REMOTE_DOMAIN, messageBody);
-        assertEq(gasPayment, 0.001 ether);
-    }
-
-    function test_QuoteGasPayment_RevertUnsupportedChain() public {
-        bytes memory messageBody = "test";
-        
-        vm.expectRevert("CrossBeg: chain not supported");
-        crossBeg.quoteGasPayment(999, messageBody);
-    }
-
-    function test_GetSupportedChains() public view {
-        uint32[] memory chainIds = new uint32[](3);
-        chainIds[0] = LOCAL_DOMAIN;
-        chainIds[1] = REMOTE_DOMAIN;
-        chainIds[2] = 999;
-        
-        bool[] memory supported = crossBeg.getSupportedChains(chainIds);
-        
-        assertEq(supported.length, 3);
-        assertEq(supported[0], false); // Local domain not in remote contracts
-        assertEq(supported[1], true);  // Remote domain is set
-        assertEq(supported[2], false); // Chain 999 not supported
-    }
-
-    function test_EmergencyWithdraw() public {
-        // Send some ETH to the contract
-        vm.deal(address(crossBeg), 1 ether);
-        
-        uint256 ownerBalanceBefore = owner.balance;
-        crossBeg.emergencyWithdraw();
-        uint256 ownerBalanceAfter = owner.balance;
-        
-        assertEq(ownerBalanceAfter - ownerBalanceBefore, 1 ether);
-        assertEq(address(crossBeg).balance, 0);
-    }
-
-    function test_EmergencyWithdraw_RevertNotOwner() public {
-        vm.prank(user1);
-        vm.expectRevert("CrossBeg: not owner");
-        crossBeg.emergencyWithdraw();
-    }
-
-    function test_GetContractStats() public {
-        // Create some requests
-        vm.prank(user1);
-        crossBeg.createPaymentRequest(user2, 1 ether, "ETH", LOCAL_DOMAIN, "Test 1", 0);
-        
-        vm.prank(user1);
-        crossBeg.createPaymentRequest(user2, 2 ether, "ETH", LOCAL_DOMAIN, "Test 2", 0);
-        
-        (uint256 totalRequests, uint256 currentRequestId) = crossBeg.getContractStats();
-        
-        assertEq(totalRequests, 2);
-        assertEq(currentRequestId, 3);
-    }
-
-    function test_ReceiveEther() public {
-        // Test that contract can receive ETH
-        vm.deal(user1, 1 ether);
-        
-        vm.prank(user1);
-        (bool success,) = address(crossBeg).call{value: 1 ether}("");
-        assertTrue(success);
-        assertEq(address(crossBeg).balance, 1 ether);
-    }
-
-    function test_RequestNonexistent() public {
-        vm.expectRevert("CrossBeg: request does not exist");
-        crossBeg.getPaymentRequest(999);
-    }
-
-    function test_CustomExpiryTime() public {
-        uint256 customExpiry = 3 days;
-        
-        vm.prank(user1);
-        uint256 requestId = crossBeg.createPaymentRequest(
-            user2,
-            1 ether,
-            "ETH",
-            LOCAL_DOMAIN,
-            "Test request",
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
             customExpiry
         );
         
-        CrossBegPaymentRequest.PaymentRequest memory request = crossBeg.getPaymentRequest(requestId);
+        CrossBegPaymentRequest.PaymentRequest memory request = mantleContract.getPaymentRequest(requestId);
         assertEq(request.expiryTime, block.timestamp + customExpiry);
     }
 
-    function test_GasRefund() public {
-        uint256 excessGas = 0.005 ether;
-        uint256 user1BalanceBefore = user1.balance;
+    function testInvalidExpiryTime() public {
+        vm.prank(alice);
+        vm.expectRevert("CrossBeg: invalid expiry time");
+        mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            30 minutes // Less than MIN_EXPIRY_TIME
+        );
         
-        vm.prank(user1);
-        crossBeg.createPaymentRequest{value: excessGas}(
-            user2,
-            1 ether,
-            "ETH",
-            REMOTE_DOMAIN,
-            "Test request",
+        vm.prank(alice);
+        vm.expectRevert("CrossBeg: invalid expiry time");
+        mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            31 days // More than MAX_EXPIRY_TIME
+        );
+    }
+
+    function testGetMultiplePaymentRequests() public {
+        vm.startPrank(alice);
+        
+        uint256 requestId1 = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            "Request 1",
             0
         );
         
-        uint256 user1BalanceAfter = user1.balance;
-        uint256 actualGasCost = 0.001 ether; // Mock mailbox quote
+        uint256 requestId2 = mantleContract.createPaymentRequest(
+            charlie,
+            TEST_AMOUNT * 2,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            "Request 2",
+            0
+        );
         
-        // User should have been refunded the excess
-        assertEq(user1BalanceBefore - user1BalanceAfter, actualGasCost);
+        vm.stopPrank();
+        
+        uint256[] memory requestIds = new uint256[](2);
+        requestIds[0] = requestId1;
+        requestIds[1] = requestId2;
+        
+        CrossBegPaymentRequest.PaymentRequest[] memory requests = mantleContract.getPaymentRequests(requestIds);
+        
+        assertEq(requests.length, 2);
+        assertEq(requests[0].id, requestId1);
+        assertEq(requests[0].target, bob);
+        assertEq(requests[1].id, requestId2);
+        assertEq(requests[1].target, charlie);
+        assertEq(requests[1].amount, TEST_AMOUNT * 2);
     }
 
-    // Allow test contract to receive ETH refunds
-    receive() external payable {}
+    function testGetSupportedChains() public view {
+        uint32[] memory chainIds = new uint32[](3);
+        chainIds[0] = MANTLE_CHAIN_ID;
+        chainIds[1] = BASE_CHAIN_ID;
+        chainIds[2] = 999999; // Unsupported chain
+        
+        bool[] memory supported = mantleContract.getSupportedChains(chainIds);
+        
+        assertTrue(supported[0]); // Mantle (local)
+        assertTrue(supported[1]); // Base
+        assertFalse(supported[2]); // Unsupported
+    }
+
+    function testUpdateMessageStatus() public {
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            BASE_CHAIN_ID,
+            TEST_MESSAGE,
+            0
+        );
+        
+        vm.prank(relayer);
+        mantleContract.updateMessageStatus(requestId, CrossBegPaymentRequest.MessageStatus.Failed);
+        
+        CrossBegPaymentRequest.PaymentRequest memory request = mantleContract.getPaymentRequest(requestId);
+        assertTrue(request.messageStatus == CrossBegPaymentRequest.MessageStatus.Failed);
+    }
+
+    function testOnlyRelayerModifier() public {
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            BASE_CHAIN_ID,
+            TEST_MESSAGE,
+            0
+        );
+        
+        // Non-relayer tries to update status
+        vm.prank(alice);
+        vm.expectRevert("CrossBeg: not authorized relayer");
+        mantleContract.updateMessageStatus(requestId, CrossBegPaymentRequest.MessageStatus.Failed);
+    }
+
+    function testInvalidInputs() public {
+        vm.startPrank(alice);
+        
+        // Invalid target address
+        vm.expectRevert("CrossBeg: invalid target address");
+        mantleContract.createPaymentRequest(
+            address(0),
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            0
+        );
+        
+        // Zero amount
+        vm.expectRevert("CrossBeg: amount must be greater than zero");
+        mantleContract.createPaymentRequest(
+            bob,
+            0,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            0
+        );
+        
+        // Empty token
+        vm.expectRevert("CrossBeg: token cannot be empty");
+        mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            "",
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            0
+        );
+        
+        // Self request
+        vm.expectRevert("CrossBeg: cannot request from yourself");
+        mantleContract.createPaymentRequest(
+            alice,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            0
+        );
+        
+        // Unsupported chain
+        vm.expectRevert("CrossBeg: target chain not supported");
+        mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            999999,
+            TEST_MESSAGE,
+            0
+        );
+        
+        vm.stopPrank();
+    }
+
+    function testEmergencyWithdraw() public {
+        // Send some ETH to contract
+        vm.deal(address(mantleContract), 1 ether);
+        
+        uint256 ownerBalanceBefore = owner.balance;
+        
+        vm.prank(owner);
+        mantleContract.emergencyWithdraw();
+        
+        assertEq(address(mantleContract).balance, 0);
+        assertEq(owner.balance, ownerBalanceBefore + 1 ether);
+    }
+
+    function testGetContractStats() public {
+        vm.prank(alice);
+        mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            0
+        );
+        
+        (uint256 totalRequests, uint256 currentRequestId) = mantleContract.getContractStats();
+        assertEq(totalRequests, 1);
+        assertEq(currentRequestId, 2);
+    }
+
+    function testIsMessageProcessed() public {
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            BASE_CHAIN_ID,
+            TEST_MESSAGE,
+            0
+        );
+        
+        CrossBegPaymentRequest.PaymentRequest memory originalRequest = mantleContract.getPaymentRequest(requestId);
+        
+        assertFalse(baseContract.isMessageProcessed(originalRequest.messageHash));
+        
+        vm.prank(relayer);
+        baseContract.receiveMessage(
+            requestId,
+            alice,
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            originalRequest.timestamp,
+            originalRequest.expiryTime,
+            originalRequest.messageHash
+        );
+        
+        assertTrue(baseContract.isMessageProcessed(originalRequest.messageHash));
+    }
+
+    // Test edge cases and error conditions
+    function testFulfillExpiredRequest() public {
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            1 hours
+        );
+        
+        // Fast forward past expiry
+        vm.warp(block.timestamp + 2 hours);
+        
+        vm.prank(bob);
+        vm.expectRevert("CrossBeg: request expired");
+        mantleContract.fulfillPaymentRequest(requestId, "0x123");
+    }
+
+    function testReceiveExpiredMessage() public {
+        vm.prank(alice);
+        uint256 requestId = mantleContract.createPaymentRequest(
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            BASE_CHAIN_ID,
+            TEST_MESSAGE,
+            1 hours
+        );
+        
+        CrossBegPaymentRequest.PaymentRequest memory originalRequest = mantleContract.getPaymentRequest(requestId);
+        
+        // Fast forward past expiry
+        vm.warp(originalRequest.expiryTime + 1);
+        
+        vm.prank(relayer);
+        vm.expectRevert("CrossBeg: request expired");
+        baseContract.receiveMessage(
+            requestId,
+            alice,
+            bob,
+            TEST_AMOUNT,
+            TEST_TOKEN,
+            MANTLE_CHAIN_ID,
+            TEST_MESSAGE,
+            originalRequest.timestamp,
+            originalRequest.expiryTime,
+            originalRequest.messageHash
+        );
+    }
+
+    function testNonExistentRequest() public {
+        vm.expectRevert("CrossBeg: request does not exist");
+        mantleContract.getPaymentRequest(999);
+        
+        vm.prank(alice);
+        vm.expectRevert("CrossBeg: request does not exist");
+        mantleContract.fulfillPaymentRequest(999, "0x123");
+    }
 }

@@ -1,0 +1,164 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* CrossBeg Light Theme - Enhanced Contrast & Visual Depth */
+    --background: 0 0% 100%; /* Pure White Background #FAFAFA */
+    --foreground: 220 13% 9%; /* Rich Dark Text #171717 */
+
+    --card: 0 0% 98%; /* Pure White Cards */
+    --card-foreground: 220 13% 9%;
+
+    --popover: 0 0% 100%; /* Pure White Popovers */
+    --popover-foreground: 220 13% 9%;
+
+    --primary: 81 100% 70%; /* Signature Lime Green #B9FF66 */
+    --primary-foreground: 220 13% 9%;
+
+    --secondary: 220 13% 96%; /* Light Gray-Blue */
+    --secondary-foreground: 220 13% 9%;
+
+    --muted: 220 13% 94%; /* Soft Gray */
+    --muted-foreground: 220 9% 46%; /* Medium Gray for better readability */
+
+    --accent: 81 100% 70%; /* Lime Green Accent */
+    --accent-foreground: 220 13% 9%;
+
+    --destructive: 0 84% 56%; /* Vibrant Red */
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 220 13% 88%; /* Defined Borders */
+    --input: 220 13% 91%; /* Clear Input Backgrounds */
+    --ring: 81 100% 70%;
+
+    --radius: 0.75rem; /* 12px */
+    
+    /* CrossBeg specific tokens - Enhanced */
+    --success: 142 76% 36%; /* Rich Green for success */
+    --success-foreground: 0 0% 98%;
+    --warning: 38 92% 50%; /* Vibrant Orange */
+    --warning-foreground: 220 13% 9%;
+    
+    /* Enhanced Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(81 100% 70%), hsl(142 76% 36%));
+    --gradient-accent: linear-gradient(135deg, hsl(81 100% 70%), hsl(220 13% 91%));
+    
+    /* Enhanced Shadows for Depth */
+    --shadow-subtle: 0 1px 3px hsl(220 13% 9% / 0.1), 0 1px 2px hsl(220 13% 9% / 0.06);
+    --shadow-card: 0 4px 6px -1px hsl(220 13% 9% / 0.1), 0 2px 4px -1px hsl(220 13% 9% / 0.06);
+    --shadow-glow: 0 10px 25px -3px hsl(81 100% 70% / 0.3), 0 4px 6px -2px hsl(81 100% 70% / 0.05);
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 220 13% 9%;
+    --sidebar-primary: 220 13% 9%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 13% 96%;
+    --sidebar-accent-foreground: 220 13% 9%;
+    --sidebar-border: 220 13% 88%;
+    --sidebar-ring: 81 100% 70%;
+  }
+
+  .dark {
+    /* CrossBeg Dark Theme - Clean & Modern */
+    --background: 236 13% 13%; /* Dark Gray #191A23 */
+    --foreground: 0 0% 95%; /* Light Gray #F3F3F3 */
+
+    --card: 236 13% 16%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 236 13% 16%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 81 100% 70%; /* Lime Green #B9FF66 */
+    --primary-foreground: 236 13% 13%;
+
+    --secondary: 236 13% 20%;
+    --secondary-foreground: 0 0% 95%;
+
+    --muted: 236 13% 20%;
+    --muted-foreground: 0 0% 70%;
+
+    --accent: 81 100% 70%; /* Lime Green #B9FF66 */
+    --accent-foreground: 236 13% 13%;
+
+    --destructive: 0 62.8% 50%;
+    --destructive-foreground: 0 0% 95%;
+
+    --border: 236 13% 25%;
+    --input: 236 13% 25%;
+    --ring: 81 100% 70%;
+    
+    /* CrossBeg specific tokens for dark theme */
+    --success: 81 100% 70%;
+    --success-foreground: 236 13% 13%;
+    --warning: 45 93% 47%;
+    --warning-foreground: 236 13% 13%;
+    
+    /* Gradients for dark theme */
+    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(265 51% 61%));
+    --gradient-accent: linear-gradient(135deg, hsl(var(--accent)), hsl(162 73% 56%));
+    
+    /* Shadows for dark theme */
+    --shadow-subtle: 0 2px 8px hsl(0 0% 0% / 0.3);
+    --shadow-card: 0 4px 24px hsl(0 0% 0% / 0.4);
+    --shadow-glow: 0 0 32px hsl(var(--primary) / 0.4);
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-space-grotesk;
+  }
+}
+
+@layer utilities {
+  .shadow-card {
+    box-shadow: var(--shadow-card);
+  }
+  
+  .shadow-subtle {
+    box-shadow: var(--shadow-subtle);
+  }
+  
+  .shadow-glow {
+    box-shadow: var(--shadow-glow);
+  }
+  
+  .gradient-primary {
+    background-color: hsl(var(--primary));
+  }
+  
+  .gradient-accent {
+    background-color: hsl(var(--accent));
+  }
+  
+  .text-success {
+    color: hsl(var(--success));
+  }
+  
+  .bg-success {
+    background-color: hsl(var(--success));
+  }
+  
+  .text-success-foreground {
+    color: hsl(var(--success-foreground));
+  }
+}

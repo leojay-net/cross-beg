@@ -5,91 +5,67 @@ import {Script, console} from "forge-std/Script.sol";
 import {CrossBegPaymentRequest} from "../src/CrossBeg.sol";
 
 /**
- * @title CrossBeg Deployment Script
- * @notice Deploys CrossBeg contracts to various networks
- * @dev This script handles deployment and configuration of CrossBeg contracts
+ * @title CrossBeg Deployment Script - Testnet Only
+ * @notice Deploys CrossBeg contracts to testnets using custom relayer pattern
+ * @dev This script handles deployment and configuration of CrossBeg contracts on testnets
  */
 contract CrossBegDeployScript is Script {
     // Network configurations
     struct NetworkConfig {
-        address mailbox;
-        uint32 domain;
+        uint32 chainId;
         string name;
+        string rpcUrl;
+        bool isTestnet;
     }
 
-    // Hyperlane Mailbox addresses for different networks
-    // These are the official Hyperlane Mailbox contract addresses
+    // Supported testnet configurations only
     mapping(uint256 => NetworkConfig) public networkConfigs;
 
+    // Deployed contract addresses (to be updated after each deployment)
+    mapping(uint32 => address) public deployedContracts;
+
     function setUp() public {
-        // Ethereum Mainnet
-        networkConfigs[1] = NetworkConfig({
-            mailbox: 0xc005dc82818d67AF737725bD4bf75435d065D239,
-            domain: 1,
-            name: "Ethereum"
-        });
-
-        // Polygon
-        networkConfigs[137] = NetworkConfig({
-            mailbox: 0x5d934f4e2f797775e53561bB72aca21ba36B96BB,
-            domain: 137,
-            name: "Polygon"
-        });
-
-        // Arbitrum One
-        networkConfigs[42161] = NetworkConfig({
-            mailbox: 0x979Ca5202784112f4738403dBec5D0F3B9daabB9,
-            domain: 42161,
-            name: "Arbitrum"
-        });
-
-        // Optimism
-        networkConfigs[10] = NetworkConfig({
-            mailbox: 0xd4C1905BB1D26BC93DAC913e13CaCC278CdCC80D,
-            domain: 10,
-            name: "Optimism"
-        });
-
-        // Base
-        networkConfigs[8453] = NetworkConfig({
-            mailbox: 0xeA87ae93Fa0019a82A727bfd3eBd1cFCa8f64f1D,
-            domain: 8453,
-            name: "Base"
-        });
-
-        // BSC
-        networkConfigs[56] = NetworkConfig({
-            mailbox: 0x2971b9Aec44507F9C681B7E5aA5be474aB9F2E29,
-            domain: 56,
-            name: "BSC"
-        });
-
-        // Avalanche
-        networkConfigs[43114] = NetworkConfig({
-            mailbox: 0xFf06aFcaABaDDd1fb08371f9ccA15D73D51FeBD6,
-            domain: 43114,
-            name: "Avalanche"
-        });
-
-        // Sepolia Testnet
+        // TESTNETS ONLY
         networkConfigs[11155111] = NetworkConfig({
-            mailbox: 0xfFAEF09B3cd11D9b20d1a19bECca54EEC2884766,
-            domain: 11155111,
-            name: "Sepolia"
+            chainId: 11155111,
+            name: "Ethereum Sepolia",
+            rpcUrl: "https://eth-sepolia.g.alchemy.com/v2/demo",
+            isTestnet: true
         });
 
-        // Mumbai Testnet
-        networkConfigs[80001] = NetworkConfig({
-            mailbox: 0x2d1889fe5B092CD988972261434F7E5f26041115,
-            domain: 80001,
-            name: "Mumbai"
+        networkConfigs[80002] = NetworkConfig({
+            chainId: 80002,
+            name: "Polygon Amoy",
+            rpcUrl: "https://rpc-amoy.polygon.technology",
+            isTestnet: true
         });
 
-        // Arbitrum Goerli
-        networkConfigs[421613] = NetworkConfig({
-            mailbox: 0xCC737a94FecaeC165AbCf12dED095BB13F037685,
-            domain: 421613,
-            name: "Arbitrum Goerli"
+        networkConfigs[84532] = NetworkConfig({
+            chainId: 84532,
+            name: "Base Sepolia",
+            rpcUrl: "https://sepolia.base.org",
+            isTestnet: true
+        });
+
+        networkConfigs[421614] = NetworkConfig({
+            chainId: 421614,
+            name: "Arbitrum Sepolia",
+            rpcUrl: "https://sepolia-rollup.arbitrum.io/rpc",
+            isTestnet: true
+        });
+
+        networkConfigs[11155420] = NetworkConfig({
+            chainId: 11155420,
+            name: "Optimism Sepolia",
+            rpcUrl: "https://sepolia.optimism.io",
+            isTestnet: true
+        });
+
+        networkConfigs[5003] = NetworkConfig({
+            chainId: 5003,
+            name: "Mantle Sepolia",
+            rpcUrl: "https://rpc.sepolia.mantle.xyz",
+            isTestnet: true
         });
     }
 
@@ -97,80 +73,375 @@ contract CrossBegDeployScript is Script {
         uint256 chainId = block.chainid;
         NetworkConfig memory config = networkConfigs[chainId];
 
-        require(config.mailbox != address(0), "Unsupported network");
+        require(config.chainId != 0, "Unsupported network");
 
+        // Get relayer address from environment or use default
+        address relayerAddress = vm.envOr(
+            "RELAYER_ADDRESS",
+            makeAddr("defaultRelayer")
+        );
+
+        console.log("=== CrossBeg Testnet Deployment ===");
         console.log("Deploying CrossBeg to", config.name);
         console.log("Chain ID:", chainId);
-        console.log("Mailbox address:", config.mailbox);
-        console.log("Domain:", config.domain);
+        console.log("Relayer address:", relayerAddress);
 
         vm.startBroadcast();
 
         // Deploy CrossBeg contract
         CrossBegPaymentRequest crossBeg = new CrossBegPaymentRequest(
-            config.mailbox,
-            config.domain
+            uint32(chainId),
+            relayerAddress
         );
 
         vm.stopBroadcast();
 
         console.log("CrossBeg deployed at:", address(crossBeg));
         console.log("Owner:", crossBeg.owner());
+        console.log("Local Chain ID:", crossBeg.localChainId());
 
-        // Log deployment info
-        console.log("\n=== Deployment Summary ===");
-        console.log("Network:", config.name);
-        console.log("Chain ID:", chainId);
-        console.log("CrossBeg Address:", address(crossBeg));
-        console.log("Mailbox Address:", config.mailbox);
-        console.log("Domain:", config.domain);
-        console.log("Owner:", crossBeg.owner());
-        console.log("========================\n");
+        // Save deployment info
+        _saveDeploymentInfo(chainId, address(crossBeg), config, relayerAddress);
 
-        // Save deployment info to file
-        _saveDeploymentInfo(chainId, address(crossBeg), config);
+        // Log deployment summary
+        _logDeploymentSummary(config, address(crossBeg), relayerAddress);
     }
 
     /**
-     * @notice Deploy and configure contracts for multiple chains
-     * @dev This function should be called after deploying to each chain individually
+     * @notice Configure supported testnet chains for an already deployed contract
+     * @dev Call this after deploying to multiple testnets
      */
-    function configureRemoteContracts() public {
+    function configureSupportedChains() public {
         uint256 chainId = block.chainid;
         NetworkConfig memory config = networkConfigs[chainId];
-        
-        require(config.mailbox != address(0), "Unsupported network");
 
-        // You need to set the deployed contract address for the current chain
-        // This should be updated after deployment
+        require(config.chainId != 0, "Unsupported testnet");
+        require(config.isTestnet, "This script only supports testnets");
+
+        // Get deployed contract address from environment
         address crossBegAddress = vm.envAddress("CROSSBEG_ADDRESS");
-        
-        require(crossBegAddress != address(0), "CrossBeg address not set");
+        require(
+            crossBegAddress != address(0),
+            "CrossBeg address not set in environment"
+        );
 
-        CrossBegPaymentRequest crossBeg = CrossBegPaymentRequest(payable(crossBegAddress));
+        CrossBegPaymentRequest crossBeg = CrossBegPaymentRequest(
+            payable(crossBegAddress)
+        );
+
+        console.log("Configuring supported testnet chains for", config.name);
+        console.log("Contract address:", crossBegAddress);
 
         vm.startBroadcast();
 
-        // Configure remote contracts
-        // Add your remote contract addresses here after deploying to other chains
-        
-        // Example configuration (update with actual deployed addresses):
-        /*
-        if (chainId == 1) { // Ethereum
-            crossBeg.setRemoteContract(137, POLYGON_CROSSBEG_ADDRESS);
-            crossBeg.setRemoteContract(42161, ARBITRUM_CROSSBEG_ADDRESS);
-            crossBeg.setRemoteContract(10, OPTIMISM_CROSSBEG_ADDRESS);
-        } else if (chainId == 137) { // Polygon
-            crossBeg.setRemoteContract(1, ETHEREUM_CROSSBEG_ADDRESS);
-            crossBeg.setRemoteContract(42161, ARBITRUM_CROSSBEG_ADDRESS);
-            crossBeg.setRemoteContract(10, OPTIMISM_CROSSBEG_ADDRESS);
-        }
-        // Add more configurations as needed
-        */
+        _configureTestnetChains(crossBeg, uint32(chainId));
 
         vm.stopBroadcast();
 
-        console.log("Remote contracts configured for", config.name);
+        console.log("Supported testnet chains configured successfully");
+    }
+
+    /**
+     * @notice Configure testnet chains
+     */
+    function _configureTestnetChains(
+        CrossBegPaymentRequest crossBeg,
+        uint32 currentChain
+    ) internal {
+        // Ethereum Sepolia configuration
+        if (currentChain == 11155111) {
+            if (vm.envOr("POLYGON_AMOY_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    80002,
+                    vm.envAddress("POLYGON_AMOY_CROSSBEG")
+                );
+                console.log("Added Polygon Amoy support");
+            }
+            if (vm.envOr("BASE_SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    84532,
+                    vm.envAddress("BASE_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Base Sepolia support");
+            }
+            if (
+                vm.envOr("ARBITRUM_SEPOLIA_CROSSBEG", address(0)) != address(0)
+            ) {
+                crossBeg.addSupportedChain(
+                    421614,
+                    vm.envAddress("ARBITRUM_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Arbitrum Sepolia support");
+            }
+            if (
+                vm.envOr("OPTIMISM_SEPOLIA_CROSSBEG", address(0)) != address(0)
+            ) {
+                crossBeg.addSupportedChain(
+                    11155420,
+                    vm.envAddress("OPTIMISM_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Optimism Sepolia support");
+            }
+            if (vm.envOr("MANTLE_SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    5003,
+                    vm.envAddress("MANTLE_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Mantle Sepolia support");
+            }
+        }
+        // Polygon Amoy configuration
+        else if (currentChain == 80002) {
+            if (vm.envOr("SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    11155111,
+                    vm.envAddress("SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Ethereum Sepolia support");
+            }
+            if (vm.envOr("BASE_SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    84532,
+                    vm.envAddress("BASE_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Base Sepolia support");
+            }
+            if (
+                vm.envOr("ARBITRUM_SEPOLIA_CROSSBEG", address(0)) != address(0)
+            ) {
+                crossBeg.addSupportedChain(
+                    421614,
+                    vm.envAddress("ARBITRUM_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Arbitrum Sepolia support");
+            }
+            if (
+                vm.envOr("OPTIMISM_SEPOLIA_CROSSBEG", address(0)) != address(0)
+            ) {
+                crossBeg.addSupportedChain(
+                    11155420,
+                    vm.envAddress("OPTIMISM_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Optimism Sepolia support");
+            }
+            if (vm.envOr("MANTLE_SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    5003,
+                    vm.envAddress("MANTLE_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Mantle Sepolia support");
+            }
+        }
+        // Base Sepolia configuration
+        else if (currentChain == 84532) {
+            if (vm.envOr("SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    11155111,
+                    vm.envAddress("SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Ethereum Sepolia support");
+            }
+            if (vm.envOr("POLYGON_AMOY_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    80002,
+                    vm.envAddress("POLYGON_AMOY_CROSSBEG")
+                );
+                console.log("Added Polygon Amoy support");
+            }
+            if (
+                vm.envOr("ARBITRUM_SEPOLIA_CROSSBEG", address(0)) != address(0)
+            ) {
+                crossBeg.addSupportedChain(
+                    421614,
+                    vm.envAddress("ARBITRUM_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Arbitrum Sepolia support");
+            }
+            if (
+                vm.envOr("OPTIMISM_SEPOLIA_CROSSBEG", address(0)) != address(0)
+            ) {
+                crossBeg.addSupportedChain(
+                    11155420,
+                    vm.envAddress("OPTIMISM_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Optimism Sepolia support");
+            }
+            if (vm.envOr("MANTLE_SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    5003,
+                    vm.envAddress("MANTLE_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Mantle Sepolia support");
+            }
+        }
+        // Arbitrum Sepolia configuration
+        else if (currentChain == 421614) {
+            if (vm.envOr("SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    11155111,
+                    vm.envAddress("SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Ethereum Sepolia support");
+            }
+            if (vm.envOr("POLYGON_AMOY_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    80002,
+                    vm.envAddress("POLYGON_AMOY_CROSSBEG")
+                );
+                console.log("Added Polygon Amoy support");
+            }
+            if (vm.envOr("BASE_SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    84532,
+                    vm.envAddress("BASE_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Base Sepolia support");
+            }
+            if (
+                vm.envOr("OPTIMISM_SEPOLIA_CROSSBEG", address(0)) != address(0)
+            ) {
+                crossBeg.addSupportedChain(
+                    11155420,
+                    vm.envAddress("OPTIMISM_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Optimism Sepolia support");
+            }
+            if (vm.envOr("MANTLE_SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    5003,
+                    vm.envAddress("MANTLE_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Mantle Sepolia support");
+            }
+        }
+        // Optimism Sepolia configuration
+        else if (currentChain == 11155420) {
+            if (vm.envOr("SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    11155111,
+                    vm.envAddress("SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Ethereum Sepolia support");
+            }
+            if (vm.envOr("POLYGON_AMOY_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    80002,
+                    vm.envAddress("POLYGON_AMOY_CROSSBEG")
+                );
+                console.log("Added Polygon Amoy support");
+            }
+            if (vm.envOr("BASE_SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    84532,
+                    vm.envAddress("BASE_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Base Sepolia support");
+            }
+            if (
+                vm.envOr("ARBITRUM_SEPOLIA_CROSSBEG", address(0)) != address(0)
+            ) {
+                crossBeg.addSupportedChain(
+                    421614,
+                    vm.envAddress("ARBITRUM_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Arbitrum Sepolia support");
+            }
+            if (vm.envOr("MANTLE_SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    5003,
+                    vm.envAddress("MANTLE_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Mantle Sepolia support");
+            }
+        }
+        // Mantle Sepolia configuration
+        else if (currentChain == 5003) {
+            if (vm.envOr("SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    11155111,
+                    vm.envAddress("SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Ethereum Sepolia support");
+            }
+            if (vm.envOr("POLYGON_AMOY_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    80002,
+                    vm.envAddress("POLYGON_AMOY_CROSSBEG")
+                );
+                console.log("Added Polygon Amoy support");
+            }
+            if (vm.envOr("BASE_SEPOLIA_CROSSBEG", address(0)) != address(0)) {
+                crossBeg.addSupportedChain(
+                    84532,
+                    vm.envAddress("BASE_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Base Sepolia support");
+            }
+            if (
+                vm.envOr("ARBITRUM_SEPOLIA_CROSSBEG", address(0)) != address(0)
+            ) {
+                crossBeg.addSupportedChain(
+                    421614,
+                    vm.envAddress("ARBITRUM_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Arbitrum Sepolia support");
+            }
+            if (
+                vm.envOr("OPTIMISM_SEPOLIA_CROSSBEG", address(0)) != address(0)
+            ) {
+                crossBeg.addSupportedChain(
+                    11155420,
+                    vm.envAddress("OPTIMISM_SEPOLIA_CROSSBEG")
+                );
+                console.log("Added Optimism Sepolia support");
+            }
+        }
+    }
+
+    /**
+     * @notice Batch configure multiple chains at once
+     */
+    function batchConfigureChains(
+        uint32[] memory chainIds,
+        address[] memory contractAddresses
+    ) public {
+        require(
+            chainIds.length == contractAddresses.length,
+            "Array length mismatch"
+        );
+
+        address crossBegAddress = vm.envAddress("CROSSBEG_ADDRESS");
+        require(crossBegAddress != address(0), "CrossBeg address not set");
+
+        CrossBegPaymentRequest crossBeg = CrossBegPaymentRequest(
+            payable(crossBegAddress)
+        );
+
+        vm.startBroadcast();
+        crossBeg.setSupportedChains(chainIds, contractAddresses);
+        vm.stopBroadcast();
+
+        console.log("Batch configured", chainIds.length, "chains");
+    }
+
+    /**
+     * @notice Update relayer address
+     */
+    function updateRelayer(address newRelayer) public {
+        require(newRelayer != address(0), "Invalid relayer address");
+
+        address crossBegAddress = vm.envAddress("CROSSBEG_ADDRESS");
+        require(crossBegAddress != address(0), "CrossBeg address not set");
+
+        CrossBegPaymentRequest crossBeg = CrossBegPaymentRequest(
+            payable(crossBegAddress)
+        );
+
+        vm.startBroadcast();
+        crossBeg.setRelayer(newRelayer);
+        vm.stopBroadcast();
+
+        console.log("Relayer updated to:", newRelayer);
     }
 
     /**
@@ -179,23 +450,45 @@ contract CrossBegDeployScript is Script {
     function verifyDeployment() public view {
         uint256 chainId = block.chainid;
         NetworkConfig memory config = networkConfigs[chainId];
-        
+
+        require(config.chainId != 0, "Unsupported testnet");
+        require(config.isTestnet, "This script only supports testnets");
+
         address crossBegAddress = vm.envAddress("CROSSBEG_ADDRESS");
         require(crossBegAddress != address(0), "CrossBeg address not set");
 
-        CrossBegPaymentRequest crossBeg = CrossBegPaymentRequest(payable(crossBegAddress));
+        CrossBegPaymentRequest crossBeg = CrossBegPaymentRequest(
+            payable(crossBegAddress)
+        );
 
-        console.log("=== Deployment Verification ===");
+        console.log("=== Testnet Deployment Verification ===");
         console.log("Network:", config.name);
+        console.log("Chain ID:", chainId);
         console.log("CrossBeg Address:", address(crossBeg));
-        console.log("Mailbox:", address(crossBeg.mailbox()));
-        console.log("Local Domain:", crossBeg.localDomain());
+        console.log("Local Chain ID:", crossBeg.localChainId());
         console.log("Owner:", crossBeg.owner());
+        console.log("Relayer:", crossBeg.relayer());
         console.log("Next Request ID:", crossBeg.nextRequestId());
-        
-        (uint256 totalRequests, uint256 currentRequestId) = crossBeg.getContractStats();
+
+        (uint256 totalRequests, uint256 currentRequestId) = crossBeg
+            .getContractStats();
         console.log("Total Requests:", totalRequests);
         console.log("Current Request ID:", currentRequestId);
+
+        // Check supported testnet chains
+        uint32[] memory testChains = new uint32[](6);
+        testChains[0] = 11155111; // Ethereum Sepolia
+        testChains[1] = 80002; // Polygon Amoy
+        testChains[2] = 84532; // Base Sepolia
+        testChains[3] = 421614; // Arbitrum Sepolia
+        testChains[4] = 11155420; // Optimism Sepolia
+        testChains[5] = 5003; // Mantle Sepolia
+
+        bool[] memory supported = crossBeg.getSupportedChains(testChains);
+        console.log("Supported testnet chains:");
+        for (uint i = 0; i < testChains.length; i++) {
+            console.log("  Chain", testChains[i], ":", supported[i]);
+        }
         console.log("==============================");
     }
 
@@ -205,59 +498,31 @@ contract CrossBegDeployScript is Script {
     function getDeploymentGasQuote() public view returns (uint256) {
         uint256 chainId = block.chainid;
         NetworkConfig memory config = networkConfigs[chainId];
-        
-        require(config.mailbox != address(0), "Unsupported network");
 
-        // Estimate gas for deployment
-        // This is an approximation based on the contract size
-        uint256 estimatedGas = 4_200_000; // Approximate gas for CrossBeg deployment
+        require(config.chainId != 0, "Unsupported testnet");
+        require(config.isTestnet, "This script only supports testnets");
 
-        console.log("Estimated gas for deployment:", estimatedGas);
+        // Estimate gas for deployment (updated for new contract)
+        uint256 estimatedGas = 3_800_000; // Approximate gas for CrossBeg deployment
+
+        console.log("Estimated gas for testnet deployment:", estimatedGas);
         console.log("Network:", config.name);
-        
+
         return estimatedGas;
     }
 
     /**
-     * @notice Save deployment information to a file
-     */
-    function _saveDeploymentInfo(
-        uint256 chainId,
-        address contractAddress,
-        NetworkConfig memory config
-    ) internal {
-        string memory deploymentInfo = string(abi.encodePacked(
-            "{\n",
-            '  "network": "', config.name, '",\n',
-            '  "chainId": ', vm.toString(chainId), ',\n',
-            '  "crossBegAddress": "', vm.toString(contractAddress), '",\n',
-            '  "mailboxAddress": "', vm.toString(config.mailbox), '",\n',
-            '  "domain": ', vm.toString(config.domain), ',\n',
-            '  "deployedAt": ', vm.toString(block.timestamp), '\n',
-            "}"
-        ));
-
-        string memory filename = string(abi.encodePacked(
-            "deployments/",
-            config.name,
-            "-",
-            vm.toString(chainId),
-            ".json"
-        ));
-
-        vm.writeFile(filename, deploymentInfo);
-        console.log("Deployment info saved to:", filename);
-    }
-
-    /**
-     * @notice Emergency function to transfer ownership
+     * @notice Transfer ownership of deployed contract
      */
     function transferOwnership(address newOwner) public {
-        address crossBegAddress = vm.envAddress("CROSSBEG_ADDRESS");
-        require(crossBegAddress != address(0), "CrossBeg address not set");
         require(newOwner != address(0), "Invalid new owner");
 
-        CrossBegPaymentRequest crossBeg = CrossBegPaymentRequest(payable(crossBegAddress));
+        address crossBegAddress = vm.envAddress("CROSSBEG_ADDRESS");
+        require(crossBegAddress != address(0), "CrossBeg address not set");
+
+        CrossBegPaymentRequest crossBeg = CrossBegPaymentRequest(
+            payable(crossBegAddress)
+        );
 
         vm.startBroadcast();
         crossBeg.transferOwnership(newOwner);
@@ -267,20 +532,125 @@ contract CrossBegDeployScript is Script {
     }
 
     /**
-     * @notice Get supported networks
+     * @notice Emergency withdraw from contract
      */
-    function getSupportedNetworks() public view {
-        console.log("=== Supported Networks ===");
-        console.log("1: Ethereum Mainnet");
-        console.log("137: Polygon");
-        console.log("42161: Arbitrum One");
-        console.log("10: Optimism");
-        console.log("8453: Base");
-        console.log("56: BSC");
-        console.log("43114: Avalanche");
-        console.log("11155111: Sepolia Testnet");
-        console.log("80001: Mumbai Testnet");
-        console.log("421613: Arbitrum Goerli");
-        console.log("=========================");
+    function emergencyWithdraw() public {
+        address crossBegAddress = vm.envAddress("CROSSBEG_ADDRESS");
+        require(crossBegAddress != address(0), "CrossBeg address not set");
+
+        CrossBegPaymentRequest crossBeg = CrossBegPaymentRequest(
+            payable(crossBegAddress)
+        );
+
+        vm.startBroadcast();
+        crossBeg.emergencyWithdraw();
+        vm.stopBroadcast();
+
+        console.log("Emergency withdrawal completed");
+    }
+
+    /**
+     * @notice Save deployment information to console (file writing disabled due to permissions)
+     */
+    function _saveDeploymentInfo(
+        uint256 chainId,
+        address contractAddress,
+        NetworkConfig memory config,
+        address relayerAddress
+    ) internal view {
+        console.log("\n=== Deployment Info ===");
+        console.log("Network:", config.name);
+        console.log("Chain ID:", chainId);
+        console.log("CrossBeg Address:", contractAddress);
+        console.log("Relayer Address:", relayerAddress);
+        console.log("Is Testnet:", config.isTestnet);
+        console.log("Deployed At:", block.timestamp);
+        console.log("Deployer Address:", msg.sender);
+        console.log("=======================\n");
+
+        // Log env variable format for easy copying
+        string memory envVarName;
+        if (chainId == 11155111) envVarName = "SEPOLIA_CROSSBEG";
+        else if (chainId == 80002) envVarName = "POLYGON_AMOY_CROSSBEG";
+        else if (chainId == 84532) envVarName = "BASE_SEPOLIA_CROSSBEG";
+        else if (chainId == 421614) envVarName = "ARBITRUM_SEPOLIA_CROSSBEG";
+        else if (chainId == 11155420) envVarName = "OPTIMISM_SEPOLIA_CROSSBEG";
+        else if (chainId == 5003) envVarName = "MANTLE_SEPOLIA_CROSSBEG";
+
+        if (bytes(envVarName).length > 0) {
+            console.log("Add to .env file:");
+            console.log(
+                string(
+                    abi.encodePacked(
+                        envVarName,
+                        "=",
+                        vm.toString(contractAddress)
+                    )
+                )
+            );
+        }
+    }
+
+    /**
+     * @notice Log deployment summary
+     */
+    function _logDeploymentSummary(
+        NetworkConfig memory config,
+        address contractAddress,
+        address relayerAddress
+    ) internal view {
+        console.log("\n=== Deployment Summary ===");
+        console.log("Network:", config.name);
+        console.log("Chain ID:", config.chainId);
+        console.log("CrossBeg Address:", contractAddress);
+        console.log("Relayer Address:", relayerAddress);
+        console.log("Is Testnet:", config.isTestnet);
+        console.log("RPC URL:", config.rpcUrl);
+        console.log("Deployer:", msg.sender);
+        console.log("========================\n");
+    }
+
+    /**
+     * @notice Get supported testnet networks
+     */
+    function getSupportedNetworks() public pure {
+        console.log("=== Supported Testnet Networks ===");
+        console.log("  11155111: Ethereum Sepolia");
+        console.log("  80002: Polygon Amoy");
+        console.log("  84532: Base Sepolia");
+        console.log("  421614: Arbitrum Sepolia");
+        console.log("  11155420: Optimism Sepolia");
+        console.log("  5003: Mantle Sepolia");
+        console.log("==================================");
+    }
+
+    /**
+     * @notice Display environment template (instead of creating file)
+     */
+    function createEnvTemplate() public pure {
+        console.log("=== Environment Template ===");
+        console.log("Create a .env file with these variables:");
+        console.log("");
+        console.log("# CrossBeg Deployment Environment Variables");
+        console.log("# Required");
+        console.log("PRIVATE_KEY=0x...");
+        console.log("RELAYER_ADDRESS=0x...");
+        console.log("");
+        console.log("# Testnet contract addresses (update after deployment)");
+        console.log("SEPOLIA_CROSSBEG=0x...");
+        console.log("BASE_SEPOLIA_CROSSBEG=0x...");
+        console.log("MANTLE_SEPOLIA_CROSSBEG=0x...");
+        console.log("POLYGON_AMOY_CROSSBEG=0x...");
+        console.log("ARBITRUM_SEPOLIA_CROSSBEG=0x...");
+        console.log("OPTIMISM_SEPOLIA_CROSSBEG=0x...");
+        console.log("");
+        console.log("# Optional RPC URLs");
+        console.log("# SEPOLIA_RPC_URL=");
+        console.log("# POLYGON_AMOY_RPC_URL=");
+        console.log("# BASE_SEPOLIA_RPC_URL=");
+        console.log("# ARBITRUM_SEPOLIA_RPC_URL=");
+        console.log("# OPTIMISM_SEPOLIA_RPC_URL=");
+        console.log("# MANTLE_SEPOLIA_RPC_URL=");
+        console.log("============================");
     }
 }
